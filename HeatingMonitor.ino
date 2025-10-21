@@ -380,7 +380,7 @@ void setup() {
   }
   
   // set provider for time syncing from RTC to local timer
-  setSyncProvider(HMON_rtc.get);
+  setSyncProvider([](){return HMON_rtc.get();});
   setSyncInterval(600);  // synchronize every 10 minutes
 
   // initialisation of sensor
