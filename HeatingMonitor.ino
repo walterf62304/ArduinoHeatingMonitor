@@ -1,9 +1,16 @@
+/******************************************************************************
+ * Heating Monitor
+ * 
+ * Changes X3.00
+ *  - bugfix clear buffer in readTemperatures()
+ *  - position of tempMinOut and tempMaxIn for procedure printEepromContent() changed
+ */
 #include <DS3232RTC.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <I2C_eeprom.h>
 
-#define FW_VERSION                "V2.05"
+#define FW_VERSION                "X3.00"
 // declaration of input pin for the sensor module
 #define PIN_TEMP_SENSORS_HEAT     6
 #define PIN_TEMP_SENSOR_OUT       3
@@ -74,8 +81,8 @@ typedef union {
     int8_t    tempAvrOut;
     int8_t    tempAvrIn;
     int8_t    tempMaxOut;
-    int8_t    tempMaxIn;
     int8_t    tempMinOut;
+    int8_t    tempMaxIn;
     int8_t    tempMinIn;
     uint8_t   burnerStarts;
     uint8_t   burningTime;
@@ -269,7 +276,7 @@ void processOperatorCommand() {
 void readTemperatures(int *tbuffer, const struct SensorConfig *sensors, int numOfSensors) {
   OneWire *onewire = NULL;
 
-  memset(tbuffer, 0, numOfSensors);
+  memset(tbuffer, 0, (numOfSensors*sizeof(int)));
   for(int i=0; i<numOfSensors; i++) {
     if(sensors[i].onewire != onewire) {
       HMON_tSensorCtrl.setOneWire(sensors[i].onewire);
@@ -297,7 +304,7 @@ void printEepromContent() {
       Serial.print(";");
     }
 
-    Serial.println(F("\r\ntempOutside;tempAvrOut;tempAvrIn;tempMaxOut;tempMaxIn;tempMinOut;tempMinIn;burnerStarts;burningTime;waterVolume;"));
+    Serial.println(F("\r\ntempOutside;tempAvrOut;tempAvrIn;tempMaxOut;tempMinOut;tempMaxIn;tempMinIn;burnerStarts;burningTime;waterVolume;"));
     // read record
     for(uint16_t r=0; r<24; r++) {
       // read data record
