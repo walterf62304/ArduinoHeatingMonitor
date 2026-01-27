@@ -2,6 +2,8 @@
  * Heating Monitor
  * 
  * Changes X3.00
+ *  - logging extended by temperature precision and logging interval changed to 15 seconds
+ *  - 2 decimal places for temperature readout added
  *  - bugfix clear buffer in readTemperatures()
  *  - position of tempMinOut and tempMaxIn for procedure printEepromContent() changed
  */
@@ -20,7 +22,7 @@
 
 // declaration for loop interval
 #define LOOP_INTERVAL             250
-#define OP_DIVIDER                4
+#define OP_DIVIDER                15
 
 // constants declarations
 #define UINT_MAX_VAL              0xFFFFu
@@ -32,6 +34,7 @@
 #define CALC_DATE_VALUE(y,m,d)    (((y-2020)<<9) + (m<<5) + d)
 #define INCR_BLOCK_IDX(idx)       {idx=(idx+1)%NO_OF_EE_BLOCKS;}
 #define CALC_TEMP_AVR(temp)       (int8_t)((temp.cntVal>0) ? ((temp.tempCum*2) + temp.cntVal) / (2 * temp.cntVal) : 0);
+#define ROUND_MEAS(v)             (v>=0) ? ((v+50)/100) : ((v-50)/100)
 
 #define SIZE_SERIAL_READ_BUFFER   0x20
 #define SBP_INCR(pos)             {pos=(pos+1)%SIZE_SERIAL_READ_BUFFER;}
@@ -127,9 +130,12 @@ String formatNumber(int num, unsigned int digits = 2) {
                       : strNum;
 }
 
-void printDateAndTime(const char* title, time_t ts) {
+void printDateAndTime(const char* title, time_t ts, bool newline = true) {
   Serial.print(String(title + formatNumber(day(ts)) + "." + formatNumber(month(ts)) + "." + String(year(ts))));
-  Serial.println(String(" " + formatNumber(hour(ts)) + ":" + formatNumber(minute(ts)) + ":" + formatNumber(second(ts))));
+  Serial.print(String(" " + formatNumber(hour(ts)) + ":" + formatNumber(minute(ts)) + ":" + formatNumber(second(ts))));
+  if( newline ) {
+    Serial.println("");
+  }
 }
 
 bool scanChar(char& scannedChar, const char *serialBuffer, unsigned int& readPos, const char *charList) {
@@ -282,7 +288,7 @@ void readTemperatures(int *tbuffer, const struct SensorConfig *sensors, int numO
       HMON_tSensorCtrl.setOneWire(sensors[i].onewire);
       HMON_tSensorCtrl.requestTemperatures();
     }
-    tbuffer[i] = (int)(HMON_tSensorCtrl.getTempCByIndex(sensors[i].index)+0.5);
+    tbuffer[i] = (int)(HMON_tSensorCtrl.getTempCByIndex(sensors[i].index)*100);
   }
 }
 
@@ -429,6 +435,8 @@ void loop() {
     unsigned int waterVolumeHour = 0;
     unsigned int waterVolumeDay  = 0;
   } mctrl;
+  static int blinkState = LOW;
+  static time_t tsLast = now();
 
   // check for operator command over serial interface (Arduino serial monitor)
   processOperatorCommand();
@@ -440,46 +448,50 @@ void loop() {
     HMON_ctrl.readValues = false;
   }
 
-  divider = (divider + 1) % OP_DIVIDER;
-  if(divider == 0) {
+  // get current timestamp
+  HMON_ctrl.tsNow = now();
+
+  if(HMON_ctrl.tsNow != tsLast) {
     static bool logEnabledLast = false;
+
+    tsLast = HMON_ctrl.tsNow;
+    // animate heartbeat
+    blinkState = (blinkState == HIGH) ? LOW : HIGH;
+    digitalWrite(LED_BUILTIN, blinkState);
+
     //////////////////////////////////////////////////////////////////////
     // second handler
     if(HMON_ctrl.logEnabled && !logEnabledLast) {
-      Serial.println("t1,t2,t3,burner,valve,water,bStartH,bTimeH,PLast,PFrag,WPulses");
+      Serial.println("date;t1;t2;t3;burner;valve;water;bStartH;bTimeH;PLast;PFrag;WPulses");
     }
     logEnabledLast = HMON_ctrl.logEnabled;
-    if(HMON_ctrl.logEnabled) {
+    divider = (divider + 1) % OP_DIVIDER;
+    if((HMON_ctrl.logEnabled) && (divider == 0)) {
+      printDateAndTime("log: ", HMON_ctrl.tsNow, false);
+      Serial.print("  ");
       // start temperature measurement
       readTemperatures(measures, HMON_tSensorConfig, CNT_OF_TEMP_SENSORS);
       for(int i=0; i<CNT_OF_TEMP_SENSORS; i++) {
-        Serial.print(measures[i]);
-        Serial.print(", ");
+        Serial.print(((float)measures[i])/100);
+        Serial.print(";");
       }
       Serial.print(digitalRead(PIN_GPIO_BURNER));
-      Serial.print(", ");
+      Serial.print(";");
       Serial.print(digitalRead(PIN_GPIO_VALVE));
-      Serial.print(", ");
+      Serial.print(";");
       Serial.print(digitalRead(PIN_GPIO_WATER));
-      Serial.print(", ");
+      Serial.print(";");
       Serial.print(mctrl.burnerStartsHour);
-      Serial.print(", ");
+      Serial.print(";");
       Serial.print(mctrl.burningTimeHour);
-      Serial.print(", ");
+      Serial.print(";");
       Serial.print(mctrl.waterPulsesLast);
-      Serial.print(", ");
+      Serial.print(";");
       Serial.print(mctrl.waterPulsesCurr);
-      Serial.print(", ");
+      Serial.print(";");
       Serial.println(HMON_waterPulses);
     }
-    
-    // animate heartbeat
-    static int blinkState = LOW;
-    blinkState = (blinkState == HIGH) ? LOW : HIGH;
-    digitalWrite(LED_BUILTIN, blinkState);
-    // get current timestamp
-    HMON_ctrl.tsNow = now();
- 
+
     //////////////////////////////////////////////////////////////////////
     // action handler for every minute
     if(minute(HMON_ctrl.tsNow) != minute(HMON_ctrl.tsLastProc)) {
@@ -499,13 +511,13 @@ void loop() {
       readTemperatures(measures, HMON_tSensorConfig, CNT_OF_TEMP_SENSORS);
       for(int i=0; i<CNT_OF_TEMP_SENSORS; i++) {
         if(abs(measures[i]) <= 120) {
-          temp[i].tMin = ((temp[i].tMin > (char)measures[i]) || (temp[i].cntVal==0)) ? (char)measures[i] : temp[i].tMin;
-          temp[i].tMax = ((temp[i].tMax < (char)measures[i]) || (temp[i].cntVal==0)) ? (char)measures[i] : temp[i].tMax;
-          temp[i].tempCum += measures[i];
+          temp[i].tMin = ((temp[i].tMin > (char)ROUND_MEAS(measures[i])) || (temp[i].cntVal==0)) ? (char)ROUND_MEAS(measures[i]) : temp[i].tMin;
+          temp[i].tMax = ((temp[i].tMax < (char)ROUND_MEAS(measures[i])) || (temp[i].cntVal==0)) ? (char)ROUND_MEAS(measures[i]) : temp[i].tMax;
+          temp[i].tempCum += ROUND_MEAS(measures[i]);
           temp[i].cntVal++;
         }
       }
-
+  
       //////////////////////////////////////////////////////////////////////
       // get burning state
       int bs = digitalRead(PIN_GPIO_BURNER);
@@ -516,12 +528,6 @@ void loop() {
         mctrl.burnerStartsHour++;
         mctrl.burningTimeHour += mctrl.burningTimeCurr;
         mctrl.burningTimeCurr = 0;
-      }
-      if(HMON_ctrl.logEnabled && (bs != mctrl.burningState)) {
-        Serial.print("burner: time=");
-        Serial.print(mctrl.burningTime);
-        Serial.print(", starts=");  
-        Serial.println(mctrl.burnerStarts);  
       }
       mctrl.burningState = bs;
       //////////////////////////////////////////////////////////////////////
